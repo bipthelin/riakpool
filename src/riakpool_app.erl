@@ -5,8 +5,12 @@
 -behaviour(application).
 -export([start/2, stop/1]).
 
+-spec start(normal | {takeover, node()} | {failover, node()},
+            any()) -> {ok, pid()} | {ok, pid(), State::any()} |
+                      {error, Reason::any()}.
 start(_StartType, _StartArgs) -> riakpool_sup:start_link().
 
+-spec stop(State::any()) -> ok.
 stop(_State) -> ok.
 
 -ifdef(TEST).
@@ -22,7 +26,6 @@ app_test_() ->
         end,
         fun(_) ->
             riakpool:stop(),
-            application:stop(riakpool),
             application:unset_env(riakpool, riakpool_host),
             application:unset_env(riakpool, riakpool_port)
         end,

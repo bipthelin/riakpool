@@ -3,17 +3,18 @@
 %% riakpool.
 
 -module(riakpool_client).
--export([delete/2, get/2, list_keys/1, put/3, put_encrypted/4, get_encrypted/3]).
+-compile({no_auto_import,[put/2]}).
+-export([delete/2, get/2, list_keys/1, put/2, put/3, put_encrypted/4, get_encrypted/3]).
 
-%% @spec delete(binary(), binary()) -> ok
 %% @doc Delete `Key' from `Bucket'.
+-spec delete(binary(), binary()) -> ok.
 delete(Bucket, Key) ->
     riakpool:execute(fun(C) -> riakc_pb_socket:delete(C, Bucket, Key) end), ok.
 
-%% @spec get(binary(), binary()) -> {ok, binary()} | {error, any()}
 %% @doc Returns the value associated with `Key' in `Bucket' as `{ok, binary()}'.
 %% If an error was encountered or the value was not present, returns
 %% `{error, any()}'.
+-spec get(binary(), binary()) -> {ok, binary()} | {error, any()}.
 get(Bucket, Key) ->
     Fun =
         fun(C) ->
@@ -36,9 +37,9 @@ get_encrypted(Bucket, Key, EncryptionKey) ->
         {error, E} -> {error, E}
     end.
 
-%% @spec list_keys(binary()) -> {ok, list()} | {error, any()}
 %% @doc Returns the list of keys in `Bucket' as `{ok, list()}'. If an error was
 %% encountered, returns `{error, any()}'.
+-spec list_keys(binary()) -> {ok, list()} | {error, any()}.
 list_keys(Bucket) ->
     Fun = fun(C) -> riakc_pb_socket:list_keys(C, Bucket) end,
     case riakpool:execute(Fun) of
@@ -46,9 +47,21 @@ list_keys(Bucket) ->
         {error, E} -> {error, E}
     end.
 
-%% @spec put(binary(), binary(), binary()) -> ok
+-spec put(binary(), binary()) -> {ok, binary()} | {error, any()}.
+put(Bucket, Value) ->
+    Fun =
+        fun(C) ->
+            Obj = riakc_obj:new(Bucket, undefined, Value),
+            riakc_pb_socket:put(C, Obj)
+        end,
+    case riakpool:execute(Fun) of
+        {ok, {ok, Keys}} -> {ok, Keys};
+        {error, E} -> {error, E}
+    end.
+
 %% @doc Associates `Key' with `Value' in `Bucket'. If `Key' already exists in
-%% `Bucket', an update will be preformed.
+%% `Bucket', an update will be performed.
+-spec put(binary(), binary(), binary()) -> ok.
 put(Bucket, Key, Value) ->
     Fun =
         fun(C) ->
@@ -64,6 +77,7 @@ put(Bucket, Key, Value) ->
         end,
     riakpool:execute(Fun), ok.
 
+-spec put_encrypted(binary(), binary(), binary(), binary()) -> ok.
 put_encrypted(Bucket, Key, Value, EncryptionKey) ->
     IVec = crypto:rand_bytes(16),
     Cipher = crypto:aes_ctr_encrypt(EncryptionKey, IVec, Value),
@@ -99,12 +113,19 @@ client_test_() ->
                     ?assertMatch({error, _}, get(B, K))
                 end
             },
+            {"key generation test",
+                fun() ->
+                    {B, V} = {<<"groceries">>, <<"eggs">>},
+                    {ok, K} = put(B, V),
+                    ?assertEqual({ok, V}, get(B, K)),
+                    ?assertEqual(ok, delete(B, K))
+                end
+            },
             {"encryption test",
                 fun() ->
                     {B, K, V1} = {<<"groceries">>, <<"mine">>, <<"eggs">>},
                     E = crypto:rand_bytes(32),
                     ?assertEqual(ok, put_encrypted(B, K, V1, E)),
-                    ?assertEqual({ok, [K]}, list_keys(B)),
                     ?assertEqual({ok, V1}, get_encrypted(B, K, E)),
                     ?assertEqual(ok, delete(B, K)),
                     ?assertMatch({error, _}, get(B, K))
