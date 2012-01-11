@@ -24,6 +24,7 @@
          start_pool/0,
          start_pool/2,
          stop/0]).
+-export([checkin/1,checkout/0]).
 -export([init/1,
          handle_call/3,
          handle_cast/2,
@@ -80,6 +81,18 @@ start_pool(Host, Port) when is_integer(Port) ->
 %% @spec stop() -> ok
 %% @doc Stops the server.
 stop() -> gen_server:cast(?MODULE, stop).
+
+
+%% @spec checkout() -> {ok, Pid} | {error, connection_error} | {error, pool_not_started}
+%% @doc Possibly dangerous, should be used within try/after style blocks as per execute
+%%      checks out a Riak socket for use
+checkout() -> gen_server:call(?MODULE, check_out).
+
+
+%% @spec checkin(Pid) -> ok
+%% @doc via a cast return the Pid to the pool of available sockets
+checkin(Pid) -> gen_server:cast(?MODULE, {check_in, Pid}).
+
 
 %% @hidden
 init([]) ->
