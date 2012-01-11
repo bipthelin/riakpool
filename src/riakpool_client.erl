@@ -29,6 +29,7 @@ get(Bucket, Key) ->
         {error, E} -> {error, E}
     end.
 
+-spec get_encrypted(binary(), binary(), binary()) -> {ok, binary()} | {error, any()}.
 get_encrypted(Bucket, Key, EncryptionKey) ->
     case get(Bucket, Key) of
         {ok, Value} ->
