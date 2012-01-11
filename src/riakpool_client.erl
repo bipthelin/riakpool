@@ -3,7 +3,7 @@
 %% riakpool.
 
 -module(riakpool_client).
--export([delete/2, get/2, list_keys/1, put/3]).
+-export([delete/2, get/2, list_keys/1, put/3, put_encrypted/4, get_encrypted/3]).
 
 %% @spec delete(binary(), binary()) -> ok
 %% @doc Delete `Key' from `Bucket'.
@@ -28,6 +28,14 @@ get(Bucket, Key) ->
         {error, E} -> {error, E}
     end.
 
+get_encrypted(Bucket, Key, EncryptionKey) ->
+    case get(Bucket, Key) of
+        {ok, Value} ->
+            <<IVec:16/binary, Cipher/binary>> = Value,
+            {ok, crypto:aes_ctr_decrypt(EncryptionKey, IVec, Cipher)};
+        {error, E} -> {error, E}
+    end.
+
 %% @spec list_keys(binary()) -> {ok, list()} | {error, any()}
 %% @doc Returns the list of keys in `Bucket' as `{ok, list()}'. If an error was
 %% encountered, returns `{error, any()}'.
@@ -44,35 +52,65 @@ list_keys(Bucket) ->
 put(Bucket, Key, Value) ->
     Fun =
         fun(C) ->
-            case riakc_pb_socket:get(C, Bucket, Key) of
+            Obj = case riakc_pb_socket:get(C, Bucket, Key, [deletedvclock]) of
                 {ok, O} ->
-                    O2 = riakc_obj:update_value(O, Value),
-                    riakc_pb_socket:put(C, O2);
-                {error, _} ->
-                    O = riakc_obj:new(Bucket, Key, Value),
-                    riakc_pb_socket:put(C, O)
-            end
+                    riakc_obj:update_value(O, Value);
+                {error, notfound, VClock} ->
+                    riakc_obj:set_vclock(riakc_obj:new(Bucket, Key, Value), VClock);
+                {error, notfound} ->
+                    riakc_obj:new(Bucket, Key, Value)
+            end,
+            riakc_pb_socket:put(C, Obj)
         end,
     riakpool:execute(Fun), ok.
+
+put_encrypted(Bucket, Key, Value, EncryptionKey) ->
+    IVec = crypto:rand_bytes(16),
+    Cipher = crypto:aes_ctr_encrypt(EncryptionKey, IVec, Value),
+    Data = <<IVec/binary, Cipher/binary>>,
+    put(Bucket, Key, Data).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-    client_test() ->
-        {B, K, V1, V2} = {<<"groceries">>, <<"mine">>, <<"eggs">>, <<"toast">>},
-        application:start(riakpool),
-        ?assertMatch({error, _}, list_keys(B)),
-        ?assertMatch({error, _}, get(B, K)),
-        riakpool:start_pool(),
-        ?assertEqual({ok, []}, list_keys(B)),
-        ?assertMatch({error, _}, get(B, K)),
-        ?assertEqual(ok, put(B, K, V1)),
-        ?assertEqual({ok, V1}, get(B, K)),
-        ?assertEqual(ok, put(B, K, V2)),
-        ?assertEqual({ok, V2}, get(B, K)),
-        ?assertEqual({ok, [K]}, list_keys(B)),
-        ?assertEqual(ok, delete(B, K)),
-        ?assertEqual({ok, []}, list_keys(B)),
-        application:stop(riakpool).
+client_test_() ->
+    {foreach,
+        fun() ->
+            application:start(riakpool),
+            riakpool:start_pool()
+        end,
+        fun(_) ->
+            ok
+        end,
+        [
+            {"client test",
+                fun() ->
+                    {B, K, V1, V2} = {<<"groceries">>, <<"mine">>, <<"eggs">>, <<"toast">>},
+                    ?assertEqual({ok, []}, list_keys(B)),
+                    ?assertMatch({error, _}, get(B, K)),
+                    ?assertEqual(ok, put(B, K, V1)),
+                    ?assertEqual({ok, V1}, get(B, K)),
+                    ?assertEqual(ok, put(B, K, V2)),
+                    ?assertEqual(ok, delete(B, K)),
+                    ?assertEqual(ok, put(B, K, V2)),
+                    ?assertEqual({ok, V2}, get(B, K)),
+                    ?assertEqual({ok, [K]}, list_keys(B)),
+                    ?assertEqual(ok, delete(B, K)),
+                    ?assertMatch({error, _}, get(B, K))
+                end
+            },
+            {"encryption test",
+                fun() ->
+                    {B, K, V1} = {<<"groceries">>, <<"mine">>, <<"eggs">>},
+                    E = crypto:rand_bytes(32),
+                    ?assertEqual(ok, put_encrypted(B, K, V1, E)),
+                    ?assertEqual({ok, [K]}, list_keys(B)),
+                    ?assertEqual({ok, V1}, get_encrypted(B, K, E)),
+                    ?assertEqual(ok, delete(B, K)),
+                    ?assertMatch({error, _}, get(B, K))
+                end
+            }
+        ]
+    }.
 
 -endif.
